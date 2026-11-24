@@ -6,6 +6,10 @@
 void livelab_start(void);
 // Call before OTA: pause DLNA and free the playback buffer (downloading while playing competes with the OTA for the network, and with the buffer occupying PSRAM the OTA has to write as it receives)
 void livelab_ota_prepare(void);
+#if CONFIG_LIVELAB_BOOT_TEST == 3
+// Test image only: make the recovery app fail to join WiFi (see Kconfig LIVELAB_BOOT_TEST)
+void livelab_boot_test_nowifi(void);
+#endif
 
 // Source pre-emption: the latest source wins. take pauses/stops/disconnects other playing sources, then hands the output to src
 void livelab_take(out_src_t src);

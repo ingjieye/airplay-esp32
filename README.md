@@ -112,8 +112,9 @@ Partition table `components/boards/partitions_livelab.csv`: nvs, otadata, `ota_0
   boots in `RTC_CNTL_STORE0`. The count is cleared on power-on, and by the firmware after
   60 s of uptime. On the 5th boot in a row without a healthy run, the bootloader erases
   otadata and starts the factory partition.
-- **Recovery app** (`recovery/`): joins the saved WiFi, or opens the open hotspot
-  `ESP32-Recovery` at 192.168.4.1.
+- **Recovery app** (`recovery/`): opens the open hotspot `ESP32-Recovery` (192.168.4.1)
+  right away. It also tries the saved WiFi for up to 60 s, and stops retrying if that
+  fails, because STA retries make the hotspot unstable.
   - It serves a firmware upload page and the same `POST /api/ota/update` endpoint, so the
     usual curl command works.
   - It can boot an existing image again: `POST /api/boot?part=ota_0`.
@@ -121,8 +122,11 @@ Partition table `components/boards/partitions_livelab.csv`: nvs, otadata, `ota_0
     (`POST /api/ll/recovery`).
 - The recovery app is never updated over the air. Only the bootloader, the partition
   table and the recovery app need UART, once.
-- To test it, build with `CONFIG_LIVELAB_BOOT_TEST=1` (crashes before marking itself
-  valid: expect a rollback) or `=2` (crashes 10 s after every boot: expect recovery mode).
+- To test it, build with `CONFIG_LIVELAB_BOOT_TEST`:
+  - `=1` crashes before marking itself valid: expect a rollback.
+  - `=2` crashes 10 s after every boot: expect recovery mode.
+  - `=3` hides the saved WiFi and restarts into recovery: expect the hotspot. Booting
+    the test image again from recovery restores the WiFi.
 
 Everything below is the upstream README.
 

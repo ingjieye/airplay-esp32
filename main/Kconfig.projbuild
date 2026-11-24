@@ -9,13 +9,16 @@ menu "LiveLab"
     config LIVELAB_BOOT_TEST
         int "Boot-failure test image (0 = normal firmware)"
         default 0
-        range 0 2
+        range 0 3
         help
             For testing recovery on real hardware only.
             1: crash right after the network comes up, before marking the image valid
                (expected: the bootloader rolls back to the previous image).
             2: mark the image valid, then crash 10 s later on every boot
                (expected: after 5 boots the bootloader starts the recovery app).
+            3: first boot: back up the saved WiFi SSID, replace it with one that does not exist
+               and restart into the recovery app (expected: it falls back to the hotspot
+               ESP32-Recovery); when booted again from recovery: restore the SSID, run normally.
 endmenu
 
 menu "Airplay ESP Configuration"

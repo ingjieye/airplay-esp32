@@ -181,6 +181,35 @@ static void healthy_cb(void *arg)
     ESP_LOGI(TAG, "Running for 60 s: boot-failure counter cleared");
 }
 
+#if CONFIG_LIVELAB_BOOT_TEST == 3
+#include "esp_system.h"
+#include "nvs.h"
+void livelab_boot_test_nowifi(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("airplay", NVS_READWRITE, &h) != ESP_OK) return;
+    char ssid[33] = {0};
+    size_t l = sizeof ssid;
+    if (nvs_get_str(h, "ssid_bak", ssid, &l) == ESP_OK) {  // booted again from recovery: restore
+        nvs_set_str(h, "wifi_ssid", ssid);
+        nvs_erase_key(h, "ssid_bak");
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGW(TAG, "Boot test 3: WiFi SSID \"%s\" restored", ssid);
+        return;
+    }
+    l = sizeof ssid;
+    if (nvs_get_str(h, "wifi_ssid", ssid, &l) != ESP_OK) { nvs_close(h); return; }
+    nvs_set_str(h, "ssid_bak", ssid);
+    nvs_set_str(h, "wifi_ssid", "livelab-no-such-network");
+    nvs_commit(h);
+    nvs_close(h);
+    const esp_partition_t *f = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    ESP_LOGW(TAG, "Boot test 3: WiFi SSID replaced, restarting into recovery");
+    if (f && esp_ota_set_boot_partition(f) == ESP_OK) esp_restart();
+}
+#endif
+
 static bool get_ip(char *ip, size_t n)
 {
     if (ethernet_is_connected() && ethernet_get_ip_str(ip, n) == ESP_OK && ip[0]) return true;

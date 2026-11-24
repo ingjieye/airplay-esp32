@@ -3,8 +3,9 @@
 // Started by the bootloader when otadata is empty: after repeated failed boots (see
 // bootloader_components/livelab_boot_hooks), or when the main firmware's "Recovery mode"
 // button selects the factory partition. It only does three things:
-//   1. join the WiFi saved by the main firmware (NVS namespace "airplay"), or open the
-//      hotspot "ESP32-Recovery" (192.168.4.1) if that fails;
+//   1. open the hotspot "ESP32-Recovery" (192.168.4.1) right away, and try to join the WiFi
+//      saved by the main firmware (NVS namespace "airplay") for up to 60 s; if that fails it
+//      stops retrying, because STA retries make the ESP32 scan channels and the hotspot unstable;
 //   2. accept a firmware image at POST /api/ota/update (same as the main firmware, so the
 //      usual curl command works) and boot it;
 //   3. boot an existing image again (POST /api/boot?part=ota_0|ota_1).
@@ -192,11 +193,6 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     xEventGroupSetBits(s_ev, EV_IP);
 }
 
-static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    if (id == WIFI_EVENT_STA_DISCONNECTED) esp_wifi_connect();  // keep retrying in STA+AP mode
-}
-
 #if CONFIG_RECOVERY_SIM
 static void net_start(void)
 {
@@ -214,6 +210,14 @@ static void net_start(void)
     xEventGroupWaitBits(s_ev, EV_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(20000));
 }
 #else
+#define STA_TRY_MS 60000  // the router here can take a minute to hand out an address
+static volatile bool s_sta_giveup;
+
+static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (id == WIFI_EVENT_STA_DISCONNECTED && !s_sta_giveup) esp_wifi_connect();
+}
+
 static void net_start(void)
 {
     char ssid[33] = {0}, pass[65] = {0};
@@ -231,28 +235,30 @@ static void net_start(void)
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip, NULL);
     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi, NULL);
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    if (ssid[0]) {
-        wifi_config_t sc = {0};
-        strlcpy((char *)sc.sta.ssid, ssid, sizeof sc.sta.ssid);
-        strlcpy((char *)sc.sta.password, pass, sizeof sc.sta.password);
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        esp_wifi_set_config(WIFI_IF_STA, &sc);
-        esp_wifi_start();
-        esp_wifi_set_ps(WIFI_PS_NONE);
-        esp_wifi_connect();
-        ESP_LOGI(TAG, "Joining \"%s\"", ssid);
-        if (xEventGroupWaitBits(s_ev, EV_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(20000)) & EV_IP) return;
-        ESP_LOGW(TAG, "Could not join \"%s\", also opening the hotspot", ssid);
-    }
-    // Hotspot (open network) at 192.168.4.1; keeps trying the saved network in the background
+    // Hotspot (open network) at 192.168.4.1, always on
     wifi_config_t ac = {.ap = {.ssid = AP_SSID, .ssid_len = sizeof AP_SSID - 1, .channel = 1, .max_connection = 2,
                                .authmode = WIFI_AUTH_OPEN}};
     esp_wifi_set_mode(ssid[0] ? WIFI_MODE_APSTA : WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ac);
+    if (ssid[0]) {
+        wifi_config_t sc = {0};
+        strlcpy((char *)sc.sta.ssid, ssid, sizeof sc.sta.ssid);
+        strlcpy((char *)sc.sta.password, pass, sizeof sc.sta.password);
+        esp_wifi_set_config(WIFI_IF_STA, &sc);
+    }
     esp_wifi_start();
-    if (ssid[0]) esp_wifi_connect();
+    esp_wifi_set_ps(WIFI_PS_NONE);
     snprintf(s_msg, sizeof s_msg, "Hotspot \"%s\" is open (192.168.4.1)", AP_SSID);
     ESP_LOGI(TAG, "%s", s_msg);
+    if (!ssid[0]) return;
+    esp_wifi_connect();
+    ESP_LOGI(TAG, "Joining \"%s\" (up to %d s)", ssid, STA_TRY_MS / 1000);
+    if (xEventGroupWaitBits(s_ev, EV_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(STA_TRY_MS)) & EV_IP) return;
+    s_sta_giveup = true;  // hotspot only from now on
+    esp_wifi_disconnect();
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    snprintf(s_msg, sizeof s_msg, "Could not join \"%s\"; hotspot \"%s\" only (192.168.4.1)", ssid, AP_SSID);
+    ESP_LOGW(TAG, "%s", s_msg);
 }
 #endif
 
@@ -266,8 +272,8 @@ void app_main(void)
     s_ev = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    start_http();  // reachable over the hotspot while the saved WiFi is still being tried
     net_start();
-    start_http();
     ESP_LOGW(TAG, "Recovery ready: http://%s/", s_ip);
     // Clear the boot-failure counter after a while, so a crashing recovery app keeps
     // returning here rather than counting up forever (it cannot go anywhere else anyway)

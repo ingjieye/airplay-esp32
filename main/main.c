@@ -391,6 +391,9 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
   ESP_ERROR_CHECK(settings_init());
+#if CONFIG_LIVELAB_BOOT_TEST == 3
+  livelab_boot_test_nowifi();
+#endif
 #ifdef CONFIG_DAC_TAS57XX
   // Load persisted sub level offset (pre-init safe; applied on first volume).
   float sub_off;
