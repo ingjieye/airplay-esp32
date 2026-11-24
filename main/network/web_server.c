@@ -27,6 +27,9 @@
 #include "ota.h"
 #include "log_stream.h"
 #include "rtsp_server.h"
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+#include "livelab.h"
+#endif
 #include "playback_events.h"
 #include "audio_delay.h"
 #include "audio_output.h"
@@ -85,6 +88,8 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+
+httpd_handle_t web_server_handle(void) { return s_server; }
 
 /* ------------------------------------------------------------------ */
 /* Cross-site request guard                                            */
@@ -261,7 +266,9 @@ typedef struct {
 } static_file_t;
 
 static const static_file_t STATIC_FILES[] = {
-    {"/", "/spiffs/www/index.html", "text/html"},
+#ifndef CONFIG_AUDIO_OUTPUT_LIVELAB
+    {"/", "/spiffs/www/index.html", "text/html"},  // LiveLab: the root path is our own page
+#endif
     // Playback and audio settings are on the main page now.
     {"/config", "/spiffs/www/index.html", "text/html"},
     {"/network", "/spiffs/www/network.html", "text/html"},
@@ -1318,6 +1325,9 @@ static esp_err_t ota_update_handler(httpd_req_t *req) {
   // Stop AirPlay to free resources during OTA
   ESP_LOGI(TAG, "Stopping AirPlay for OTA update");
   rtsp_server_stop();
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  livelab_ota_prepare();
+#endif
 
   esp_err_t err = ota_start_from_http(req);
 
@@ -3289,6 +3299,10 @@ esp_err_t web_server_start(uint16_t port) {
 #endif
 #ifdef CONFIG_DAC_TAS57XX
   config.max_uri_handlers += 11; // tuning page + HF1/HF3 get/post/commit/revert
+#endif
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  config.max_uri_handlers += 16; // LiveLab web page and API handlers
+  config.max_open_sockets += 2;  // the web page polls status every second, plus concurrent requests such as cover art
 #endif
   config.max_resp_headers = 8;
 #ifdef CONFIG_SENDSPIN_OPUS

@@ -44,6 +44,7 @@ set( SRC_FILES
     "network/ota.c"
     "network/dns_server.c"
     "network/log_stream.c"
+    "network/ethernet_sim.c"
     "led.c"
     "buttons.c"
     "playback_control.c"
@@ -55,7 +56,11 @@ set( SRC_FILES
 # carries weak defaults for the optional entry points, so a backend only has
 # to implement what it actually supports.
 list(APPEND SRC_FILES "audio/audio_output_common.c")
-if(CONFIG_AUDIO_OUTPUT_SPDIF)
+if(CONFIG_AUDIO_OUTPUT_LIVELAB)
+    list(APPEND SRC_FILES "livelab/audio_output_livelab.c" "livelab/output.c" "livelab/spdif_enc.c"
+         "livelab/livelab.c" "livelab/dlna.c" "livelab/gena.c" "livelab/player.c" "livelab/netstream.c"
+         "livelab/decoders.c" "livelab/web.c" "livelab/m4a.c")
+elseif(CONFIG_AUDIO_OUTPUT_SPDIF)
     list(APPEND SRC_FILES "audio/audio_output_spdif.c")
 elseif(CONFIG_AUDIO_OUTPUT_USB)
     list(APPEND SRC_FILES "audio/audio_output_usb.c")
@@ -108,6 +113,7 @@ set( INC_DIRS
     "network"
     "sendspin"
     "usb"
+    "livelab"
 )
 
 set( DEPS
@@ -148,11 +154,22 @@ set( DEPS
     list(APPEND DEPS esp_eth)
 #endif()
 
+set(EMBED_TXT "")
+if(CONFIG_AUDIO_OUTPUT_LIVELAB)
+    set(EMBED_TXT "livelab/index.html")
+endif()
+
 idf_component_register(
     SRCS ${SRC_FILES}
     INCLUDE_DIRS ${INC_DIRS}
     PRIV_REQUIRES ${DEPS}
+    EMBED_TXTFILES ${EMBED_TXT}
 )
+
+if(CONFIG_AUDIO_OUTPUT_LIVELAB)
+    # Third-party decoder libraries (dr_flac / dr_mp3) with relaxed warnings
+    set_source_files_properties("livelab/decoders.c" PROPERTIES COMPILE_OPTIONS "-Wno-error;-w")
+endif()
 
 # Enable function wrapping for abort() to intercept panics and mute GPIO
 if(CONFIG_BOARD_SQUEEZEAMP_COMMON)

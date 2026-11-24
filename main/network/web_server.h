@@ -21,6 +21,7 @@
  * @param port HTTP server port (default: 80)
  */
 esp_err_t web_server_start(uint16_t port);
+httpd_handle_t web_server_handle(void);  // LiveLab registers its own page and handlers
 
 /**
  * Stop the web server

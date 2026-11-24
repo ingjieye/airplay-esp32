@@ -1,0 +1,16 @@
+# QEMU simulator only (layered on top of defaults + livelab, without Bluetooth)
+CONFIG_LIVELAB_SIM=y
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_OPENETH=y
+# Upstream raises the TCP window to 32KB (~22 packets); the virtual NIC's receive buffers can't hold that and drop packets, and TCP waits 1 s to retransmit
+CONFIG_ETH_OPENETH_DMA_RX_BUFFER_NUM=32
+CONFIG_ETH_OPENETH_DMA_TX_BUFFER_NUM=4
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=n
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHMODE="dio"
+# QEMU's dual cores coordinate very slowly while writing flash, falsely triggering the interrupt watchdog (chip rev3 + PSRAM requires it enabled, so only the timeout can be relaxed)
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000
+# Single core: with dual core + PSRAM in QEMU, the other core hangs while writing flash (interrupt watchdog)
+CONFIG_FREERTOS_UNICORE=y

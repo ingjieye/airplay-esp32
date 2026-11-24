@@ -7,7 +7,7 @@
 #include "sdkconfig.h"
 #include <stdbool.h>
 
-#ifdef CONFIG_ETH_W5500_ENABLED
+#if defined(CONFIG_ETH_W5500_ENABLED) || defined(CONFIG_LIVELAB_SIM)
 
 esp_err_t ethernet_init(void);
 bool ethernet_is_connected(void);
@@ -16,7 +16,7 @@ esp_err_t ethernet_get_ip_str(char *ip_str, size_t len);
 void ethernet_get_mac_str(char *mac_str, size_t len);
 void ethernet_set_hostname(const char *device_name);
 
-#else // !CONFIG_ETH_W5500_ENABLED
+#else // no Ethernet
 
 static inline esp_err_t ethernet_init(void) {
   return ESP_ERR_NOT_SUPPORTED;

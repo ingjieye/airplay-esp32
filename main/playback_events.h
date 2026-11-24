@@ -31,6 +31,7 @@ typedef enum {
   PLAYBACK_SOURCE_BLUETOOTH,
   PLAYBACK_SOURCE_USB,
   PLAYBACK_SOURCE_SENDSPIN,
+  PLAYBACK_SOURCE_DLNA, // LiveLab: DLNA pushes from NetEase etc.
   PLAYBACK_SOURCE_COUNT,
 } playback_source_t;
 

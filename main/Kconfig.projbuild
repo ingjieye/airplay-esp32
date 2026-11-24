@@ -1,3 +1,13 @@
+menu "LiveLab"
+    config LIVELAB_SIM
+        bool "QEMU simulator build (OpenCores virtual NIC, audio sent to the host over TCP)"
+        default n
+    config LIVELAB_SIM_SINK_PORT
+        int "Simulator audio sink port (host 10.0.2.2)"
+        default 9000
+        depends on LIVELAB_SIM
+endmenu
+
 menu "Airplay ESP Configuration"
     # Board configuration is now in components/boards/Kconfig.projbuild
     
@@ -176,6 +186,9 @@ menu "Airplay ESP Configuration"
 
         config AUDIO_OUTPUT_SPDIF
             bool "SPDIF (bit-banged via I2S)"
+
+        config AUDIO_OUTPUT_LIVELAB
+            bool "LiveLab (optical S/PDIF 24bit + 3.5mm DAC, switchable at runtime)"
 
         config AUDIO_OUTPUT_USB
             bool "USB Audio Class (UAC)"

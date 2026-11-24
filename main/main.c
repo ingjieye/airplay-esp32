@@ -17,6 +17,9 @@
 #include "ptp_clock.h"
 #include "rtsp_server.h"
 #include "settings.h"
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+#include "livelab.h"
+#endif
 #include "web_server.h"
 #include "log_stream.h"
 #include "wifi.h"
@@ -103,6 +106,9 @@ static void start_airplay_services(void) {
   }
 
   ESP_LOGI(TAG, "Starting AirPlay services...");
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  livelab_start();
+#endif
 
   // One-time infrastructure init (PTP, HAP, audio receiver/output)
   if (!s_airplay_infrastructure_ready) {
@@ -307,6 +313,15 @@ static void on_bt_state_changed(bool connected) {
 #ifdef CONFIG_SENDSPIN_ENABLE
   sendspin_set_output_available(!connected);
 #endif
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  // LiveLab: sources coexist, the latest one pre-empts earlier ones (see livelab.c); Bluetooth connecting doesn't shut down AirPlay
+  ESP_LOGI(TAG, "BT %s", connected ? "connected" : "disconnected");
+  if (!connected) {
+    // The Bluetooth module sets itself "non-connectable, non-discoverable" when connected; restore that here after disconnect, or the phone can never connect again
+    bt_a2dp_sink_set_discoverable(true);
+  }
+  return;
+#endif
   if (connected) {
     ESP_LOGI(TAG, "BT connected — disabling AirPlay");
     stop_airplay_services();
@@ -332,6 +347,9 @@ static void on_playback_event(playback_source_t source, playback_event_t event,
   (void)source;
   (void)data;
   (void)user_data;
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  return;  // LiveLab: don't hide or disable Bluetooth during AirPlay playback; Bluetooth can pre-empt at any time
+#endif
   if (bt_a2dp_sink_is_connected()) {
     return;
   }
@@ -430,7 +448,12 @@ void app_main(void) {
     }
   }
 #endif
+#ifndef CONFIG_LIVELAB_SIM
   spiffs_storage_init();
+#else
+  // Mounting SPIFFS in QEMU takes thousands of flash reads, each freezing the other core; slow enough to trip the watchdog
+  ESP_LOGW(TAG, "Simulator: skipping SPIFFS");
+#endif
 #ifdef CONFIG_SOFTWARE_EQ
   // Ahead of the web server, which serves the tuning, and of the first
   // audio, which runs through it. Without it the audio passes through flat.
@@ -530,6 +553,9 @@ void app_main(void) {
   }
 #endif
   web_server_start(80);
+#ifdef CONFIG_AUDIO_OUTPUT_LIVELAB
+  livelab_start();  // DLNA + our web page; if not online yet, start_airplay_services() calls it again
+#endif
   task_create_spiram(network_monitor_task, "net_mon", 4096, NULL, 5, NULL,
                      NULL);
   log_dram("web server");
