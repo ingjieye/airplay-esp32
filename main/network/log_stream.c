@@ -69,6 +69,21 @@ static size_t ring_read(char *buf, size_t max) {
     buf[i] = s_ring[s_tail & LOG_RING_MASK];
     s_tail = (s_tail + 1) & LOG_RING_MASK;
   }
+  /* WebSocket text frames must be complete UTF-8; browsers drop the connection on half a multi-byte character (e.g. CJK).
+   * If the end is an incomplete multi-byte character, leave it in the ring and send it with the next frame. */
+  size_t k = avail;
+  while (k > 0 && avail - k < 4 && ((unsigned char)buf[k - 1] & 0xC0) == 0x80) {
+    k--;
+  }
+  if (k > 0) {
+    unsigned char lead = (unsigned char)buf[k - 1];
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (need > 1 && (k - 1) + need > avail) {
+      size_t back = avail - (k - 1);
+      s_tail = (s_tail - back) & LOG_RING_MASK;
+      avail = k - 1;
+    }
+  }
   return avail;
 }
 
