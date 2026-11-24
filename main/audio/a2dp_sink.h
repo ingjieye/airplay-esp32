@@ -73,6 +73,7 @@ bool bt_a2dp_sink_is_suspended(void);
  * AVRCP passthrough commands for hardware button control.
  * These send commands to the connected BT source device.
  */
+void bt_a2dp_sink_disconnect(void);
 void bt_a2dp_send_playpause(void);
 void bt_a2dp_send_next(void);
 void bt_a2dp_send_prev(void);

@@ -52,7 +52,9 @@ static const char *TAG = "bt_a2dp";
 /* Configuration                                                              */
 /* ========================================================================== */
 
-#define RINGBUF_SIZE     ((size_t)16 * 1024)
+// 16KB (~93 ms) can't absorb the bursts when WiFi and Bluetooth coexist; the optical build overflowed every ten-odd seconds;
+// enlarged to 64KB (~370 ms) and moved to PSRAM, since internal RAM isn't enough.
+#define RINGBUF_SIZE     ((size_t)64 * 1024)
 #define RINGBUF_PREFETCH (RINGBUF_SIZE * 6 / 10)
 
 #define BT_TASK_STACK 4096
@@ -99,6 +101,7 @@ typedef enum {
 /* ========================================================================== */
 
 static bt_a2dp_state_cb_t s_state_cb = NULL;
+static esp_bd_addr_t s_peer_bda;
 static volatile bool s_connected = false;
 static volatile bool s_audio_started = false;
 static volatile bool s_avrc_playing = false; /* AVRCP play state (instant) */
@@ -193,6 +196,11 @@ static void bt_i2s_writer_task(void *arg) {
       audio_output_write_pcm(data, item_size, volume_q15, portMAX_DELAY);
       vRingbufferReturnItem(s_ringbuf, data);
     } else {
+      static uint32_t diag_underruns;
+      if ((++diag_underruns & 63) == 1) {
+        ESP_LOGW(TAG, "diag: ringbuf empty, writing silence (count=%lu)",
+                 (unsigned long)diag_underruns);
+      }
       // Buffer underrun — write silence to keep I2S fed
       audio_output_write_pcm(silence, sizeof(silence), volume_q15,
                              pdMS_TO_TICKS(10));
@@ -211,7 +219,8 @@ static void i2s_task_start(void) {
   s_ringbuf_mode = RINGBUF_MODE_PREFETCHING;
 
   if (s_ringbuf == NULL) {
-    s_ringbuf = xRingbufferCreate(RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
+    s_ringbuf = xRingbufferCreateWithCaps(RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF,
+                                          MALLOC_CAP_SPIRAM);
   }
   if (s_i2s_sem == NULL) {
     s_i2s_sem = xSemaphoreCreateBinary();
@@ -243,7 +252,7 @@ static void i2s_task_stop(void) {
     while ((data = xRingbufferReceive(s_ringbuf, &size, 0)) != NULL) {
       vRingbufferReturnItem(s_ringbuf, data);
     }
-    vRingbufferDelete(s_ringbuf);
+    vRingbufferDeleteWithCaps(s_ringbuf);
     s_ringbuf = NULL;
   }
 
@@ -314,6 +323,7 @@ static void bt_a2dp_evt_handler(uint16_t event, void *param) {
     } else if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
       ESP_LOGI(TAG, "A2DP connected");
       s_connected = true;
+      memcpy(s_peer_bda, a2d->conn_stat.remote_bda, sizeof(s_peer_bda));
 
       // Notify main app to disable AirPlay (stops playback task + RTSP)
       if (s_state_cb) {
@@ -1126,6 +1136,14 @@ static void send_passthrough(uint8_t key_code) {
   esp_avrc_ct_send_passthrough_cmd(0, key_code, ESP_AVRC_PT_CMD_STATE_PRESSED);
   vTaskDelay(pdMS_TO_TICKS(50));
   esp_avrc_ct_send_passthrough_cmd(0, key_code, ESP_AVRC_PT_CMD_STATE_RELEASED);
+}
+
+// Disconnect the current phone (used when another source pre-empts the output: a Bluetooth connection slows WiFi); it can still connect again afterwards
+void bt_a2dp_sink_disconnect(void) {
+  if (s_connected) {
+    ESP_LOGI(TAG, "Disconnecting A2DP peer (output taken by another source)");
+    esp_a2d_sink_disconnect(s_peer_bda);
+  }
 }
 
 void bt_a2dp_send_playpause(void) {
