@@ -14,3 +14,5 @@ CONFIG_ESP_INT_WDT=y
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000
 # Single core: with dual core + PSRAM in QEMU, the other core hangs while writing flash (interrupt watchdog)
 CONFIG_FREERTOS_UNICORE=y
+# QEMU does not emulate pull-ups, so the button GPIO always reads low and would always start recovery
+CONFIG_BOOTLOADER_FACTORY_RESET=n

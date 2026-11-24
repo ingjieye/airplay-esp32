@@ -120,6 +120,10 @@ Partition table `components/boards/partitions_livelab.csv`: nvs, otadata, `ota_0
   - It can boot an existing image again: `POST /api/boot?part=ota_0`.
   - The main firmware's System page has a **Recovery mode** button
     (`POST /api/ll/recovery`).
+- **Button**: hold the on-board button (GPIO15, low when pressed) while powering on, for
+  about 5 s. The bootloader erases otadata and starts the recovery app, even if both
+  firmware images are broken (`CONFIG_BOOTLOADER_FACTORY_RESET`). No data partition is
+  erased. It is disabled in the simulator, because QEMU does not emulate pull-ups.
 - The recovery app is never updated over the air. Only the bootloader, the partition
   table and the recovery app need UART, once.
 - To test it, build with `CONFIG_LIVELAB_BOOT_TEST`:
