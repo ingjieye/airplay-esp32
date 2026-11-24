@@ -1,0 +1,29 @@
+# LiveLab ESP32-WROVER-E optical/DAC board (8MB flash, 8MB PSRAM of which 4MB can be mapped)
+CONFIG_BOARD_ESP32_GENERIC=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# DAC (3.5mm): pins from the seller
+CONFIG_I2S_SCK_IO=0
+CONFIG_I2S_BCK_IO=33
+CONFIG_I2S_WS_IO=32
+CONFIG_I2S_DO_IO=25
+# Optical module
+CONFIG_SPDIF_DO_IO=14
+
+CONFIG_BTN_PLAY_PAUSE_GPIO=-1
+CONFIG_DISPLAY_ENABLED=n
+
+# Output: our own output layer (optical 24bit + 3.5mm, switchable at runtime)
+CONFIG_AUDIO_OUTPUT_LIVELAB=y
+
+# Sockets: AirPlay (RTSP/PTP/mDNS/events/data) + web page + DLNA (separate HTTP, SSDP, download, event notifications)
+CONFIG_LWIP_MAX_SOCKETS=28
+# DLNA SOAP request headers are long
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# Global -O2: upstream's Bluetooth layer switched to -Os to save IRAM, but measured with -O2 IRAM is 95KB/128KB, still with headroom;
+# with -Os, 24bit FLAC decoding + S/PDIF encoding can't keep up (dropouts, crackle on track change). This layer must come after .bt to override it
+CONFIG_COMPILER_OPTIMIZATION_SIZE=n
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

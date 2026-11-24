@@ -54,6 +54,9 @@
 
 #define SPDIF_DO_PIN CONFIG_SPDIF_DO_IO
 
+/* Clock source: APLL, for an exact audio sample rate */
+#define SPDIF_CLK_SRC I2S_CLK_SRC_APLL
+
 #if CONFIG_FREERTOS_UNICORE
 #define PLAYBACK_CORE 0
 #else
@@ -67,7 +70,10 @@
 #define BMC_BITS      64 /* bits per SPDIF sub-frame after BMC */
 #define BMC_FACTOR    (BMC_BITS / I2S_BITS) /* = 2 */
 #define SPDIF_BLOCK   192 /* sub-frames per SPDIF block (L+R)  */
-#define SPDIF_BUF_DIV 2   /* half-block buffering              */
+/* One DMA buffer = one whole 192-frame block, with the B preamble fixed at the start. Previously
+ * B/M alternated per half block; on underrun, DMA looping old buffers or out-of-order filling put B
+ * in the wrong place and the receiver kept losing lock (the "beeping" after a pause, during OTA, or when Bluetooth connects). Self-contained blocks are immune to underruns. */
+#define SPDIF_BUF_DIV 1
 
 /* DMA: one DMA buffer = one half-block = 96 stereo frames = 192 I2S
  * "pseudo-frames" of 32-bit stereo.  Size = 192 × 8 = 1536 bytes.
@@ -79,7 +85,7 @@
  * stale descriptors during an underrun.  Multi-room alignment does not
  * depend on the depth being identical, only on it being reported honestly,
  * which the live cursor below does.                                    */
-#define DMA_BUF_COUNT  22
+#define DMA_BUF_COUNT  11 /* 11 whole blocks = 2112 frames, ~48 ms, same as before */
 #define DMA_BUF_FRAMES (SPDIF_BLOCK * BMC_BITS / I2S_BITS / SPDIF_BUF_DIV)
 /* Audio (stereo) frames per DMA buffer, and bytes per audio frame on the
  * wire: each 16-bit sample becomes a 64-bit BMC sub-frame.              */
@@ -148,6 +154,12 @@ static i2s_chan_handle_t tx_handle;
 static volatile bool flush_requested = false;
 static volatile int source_rate = 44100;
 static volatile bool resample_reinit_needed = false;
+/* Playback task lifecycle: Bluetooth takes the output by stopping the task
+ * and writing PCM itself, so the two never encode into spdif_buf at once. */
+static TaskHandle_t playback_task_handle;
+static volatile bool playback_running;
+/* Current line rate; Bluetooth may retune it, AirPlay restores OUTPUT_RATE. */
+static uint32_t s_line_rate = OUTPUT_RATE;
 
 /* ── SPDIF encode buffer and write pointer ─────────────────────────────── */
 
@@ -257,6 +269,8 @@ static void spdif_buf_init(void) {
   for (int i = 0; i < (int)SPDIF_BUF_WORDS; i += 2) {
     spdif_buf[i] = (bmc_mw ^= BMC_MW_DIF);
   }
+  /* The first left-channel preamble of the block is B and is never changed afterwards */
+  ((uint8_t *)spdif_buf)[SYNC_OFFSET] ^= SYNC_FLIP;
 }
 
 /* ── SPDIF write ───────────────────────────────────────────────────────
@@ -285,11 +299,6 @@ static void spdif_write(const void *src, size_t size) {
     if (spdif_ptr >= &spdif_buf[SPDIF_BUF_WORDS]) {
       size_t written;
 
-      /* XOR toggles byte at SYNC_OFFSET between M and B preamble.
-       * Because we always XOR, it alternates: B on even half-blocks,
-       * M on odd ones → B appears once every 192 frames.               */
-      ((uint8_t *)spdif_buf)[SYNC_OFFSET] ^= SYNC_FLIP;
-
       if (i2s_channel_write(tx_handle, spdif_buf, sizeof(spdif_buf), &written,
                             portMAX_DELAY) == ESP_OK) {
         __atomic_add_fetch(&output_submitted_frames,
@@ -316,7 +325,7 @@ static void playback_task(void *arg) {
     return;
   }
 
-  while (true) {
+  while (playback_running) {
     if (resample_reinit_needed) {
       resample_reinit_needed = false;
       audio_resample_init((uint32_t)source_rate, OUTPUT_RATE, 2);
@@ -348,6 +357,11 @@ static void playback_task(void *arg) {
       vTaskDelay(1);
     }
   }
+  free(pcm);
+  free(silence);
+  free(resample_buf);
+  playback_task_handle = NULL;
+  vTaskDelete(NULL);
 }
 
 /* ── Public API ────────────────────────────────────────────────────────── */
@@ -374,7 +388,7 @@ esp_err_t audio_output_init(void) {
   i2s_std_clk_config_t clk_cfg =
       I2S_STD_CLK_DEFAULT_CONFIG((uint32_t)OUTPUT_RATE * BMC_FACTOR);
 #if SOC_I2S_SUPPORTS_APLL
-  clk_cfg.clk_src = I2S_CLK_SRC_APLL;
+  clk_cfg.clk_src = SPDIF_CLK_SRC;
 #endif
   clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
@@ -413,7 +427,6 @@ esp_err_t audio_output_init(void) {
   }
   for (int i = 0; i < DMA_BUF_COUNT; i++) {
     size_t loaded = 0;
-    ((uint8_t *)spdif_buf)[SYNC_OFFSET] ^= SYNC_FLIP;
     ESP_RETURN_ON_ERROR(i2s_channel_preload_data(tx_handle, spdif_buf,
                                                  sizeof(spdif_buf), &loaded),
                         TAG, "preload failed");
@@ -431,12 +444,136 @@ esp_err_t audio_output_init(void) {
 }
 
 void audio_output_start(void) {
+  if (playback_task_handle != NULL) {
+    return; // already running
+  }
+  if (s_line_rate != OUTPUT_RATE) {
+    audio_output_set_sample_rate(OUTPUT_RATE); // Bluetooth left it retuned
+  }
+  playback_running = true;
   xTaskCreatePinnedToCore(playback_task, "spdif_play", 4096, NULL,
-                          AUDIO_PLAYBACK_TASK_PRIORITY, NULL, PLAYBACK_CORE);
+                          AUDIO_PLAYBACK_TASK_PRIORITY, &playback_task_handle,
+                          PLAYBACK_CORE);
+}
+
+void audio_output_stop(void) {
+  if (playback_task_handle == NULL) {
+    return;
+  }
+  playback_running = false;
+  for (int timeout = 40; playback_task_handle != NULL && timeout > 0;
+       timeout--) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  if (playback_task_handle != NULL) {
+    ESP_LOGW(TAG, "Playback task did not exit within timeout");
+  } else {
+    ESP_LOGI(TAG, "Playback task stopped");
+  }
+}
+
+/* Direct PCM path for Bluetooth, used while the playback task is stopped.
+ * spdif_write() alternates L/R by position, so only whole stereo frames may
+ * reach it: a partial frame waits here for the rest. */
+#define PCM_FRAME_BYTES (2 * sizeof(int16_t))
+static uint8_t pcm_carry[PCM_FRAME_BYTES];
+static size_t pcm_carry_len;
+
+// Diagnostics: every 10 s print the actual optical output rate and the write rate
+static void diag_rate(size_t frames_in) {
+  static int64_t t0;
+  static uint64_t sent0, in;
+  in += frames_in;
+  int64_t now = esp_timer_get_time();
+  uint64_t sent = __atomic_load_n(&output_sent_frames, __ATOMIC_RELAXED);
+  if (t0 == 0) {
+    t0 = now;
+    sent0 = sent;
+    in = 0;
+    return;
+  }
+  if (now - t0 >= 10000000) {
+    double sec = (double)(now - t0) / 1e6;
+    ESP_LOGW(TAG, "diag rate: line=%.1f Hz, written=%.1f Hz (line_rate=%lu)",
+             (double)(sent - sent0) / sec, (double)in / sec,
+             (unsigned long)s_line_rate);
+    t0 = now;
+    sent0 = sent;
+    in = 0;
+  }
+}
+
+static void write_frames(const uint8_t *src, size_t bytes, int32_t volume_q15) {
+  static int16_t stage[256 * 2];
+  while (bytes > 0) {
+    size_t have = pcm_carry_len;
+    memcpy(stage, pcm_carry, have);
+    size_t take = sizeof(stage) - have;
+    if (take > bytes) {
+      take = bytes;
+    }
+    memcpy((uint8_t *)stage + have, src, take);
+    src += take;
+    bytes -= take;
+    have += take;
+    size_t frames = have / PCM_FRAME_BYTES;
+    pcm_carry_len = have - frames * PCM_FRAME_BYTES;
+    memcpy(pcm_carry, (uint8_t *)stage + frames * PCM_FRAME_BYTES,
+           pcm_carry_len);
+    if (frames == 0) {
+      continue;
+    }
+    if (volume_q15 >= 0 && volume_q15 < 32768) {
+      for (size_t i = 0; i < frames * 2; i++) {
+        stage[i] = (int16_t)(((int32_t)stage[i] * volume_q15) >> 15);
+      }
+    }
+    led_audio_feed(stage, frames);
+    spdif_write(stage, frames * PCM_FRAME_BYTES);
+    diag_rate(frames);
+  }
+}
+
+esp_err_t audio_output_write(const void *data, size_t bytes, TickType_t wait) {
+  (void)wait; // spdif_write() blocks until the DMA takes the half-block
+  write_frames(data, bytes, -1);
+  return ESP_OK;
+}
+
+esp_err_t audio_output_write_pcm(const void *data, size_t bytes,
+                                 int32_t volume_q15, TickType_t wait) {
+  (void)wait;
+  write_frames(data, bytes, volume_q15);
+  return ESP_OK;
+}
+
+void audio_output_set_sample_rate(uint32_t rate) {
+  // Only with the playback task stopped (Bluetooth), or from start() before
+  // it runs.  The receiver relocks on the new rate.
+  pcm_carry_len = 0;
+  if (rate == s_line_rate) {
+    // Leave the clock alone if the sample rate is unchanged: stopping the clock makes the receiver lose lock and relock (the "beeping" when Bluetooth connects)
+    ESP_LOGI(TAG, "Sample rate already %" PRIu32 " Hz, clock untouched", rate);
+    return;
+  }
+  // Bluetooth calls this before the AirPlay playback task has stopped: stop the task first so it doesn't write data during the clock switch
+  audio_output_stop();
+  ESP_LOGI(TAG, "Setting sample rate to %" PRIu32 " Hz", rate);
+  i2s_channel_disable(tx_handle);
+  i2s_std_clk_config_t clk_cfg =
+      I2S_STD_CLK_DEFAULT_CONFIG(rate * BMC_FACTOR);
+#if SOC_I2S_SUPPORTS_APLL
+  clk_cfg.clk_src = SPDIF_CLK_SRC;
+#endif
+  clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+  i2s_channel_reconfig_std_clock(tx_handle, &clk_cfg);
+  s_line_rate = rate;
+  i2s_channel_enable(tx_handle);
 }
 
 void audio_output_flush(void) {
   flush_requested = true;
+  pcm_carry_len = 0;
 }
 
 void audio_output_set_source_rate(int rate) {
