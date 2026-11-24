@@ -652,6 +652,68 @@ def start_qemu(keep_flash=False):
     raise SystemExit("simulator didn't boot within 60 s")
 
 
+def log_count(text):
+    if not os.path.exists(SERIAL_LOG):
+        return 0
+    return open(SERIAL_LOG, "rb").read().decode("utf8", "replace").count(text)
+
+
+def wait_log(text, count, timeout=90):
+    """Wait until text has appeared in the serial log at least count times"""
+    end = time.time() + timeout
+    while time.time() < end:
+        if log_count(text) >= count:
+            return True
+        time.sleep(1)
+    return False
+
+
+def http_req(method, url, timeout=10):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=b"" if method == "POST" else None, method=method),
+                                    timeout=timeout) as r:
+            return r.status, r.read().decode("utf8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf8", "replace")
+    except Exception as e:
+        return 0, str(e)
+
+
+def sc_recovery(sink):
+    """Recovery app: with otadata empty the bootloader starts it; it serves the upload page and boots the existing
+    image again; the main firmware's Recovery mode button gets there too. (The boot-loop counter itself is tested
+    on real hardware: QEMU does not reset peripherals on a software reset, so firmware crashes right after one.)"""
+    if not os.path.exists(os.path.join(ROOT, "build_recovery_sim", "recovery.bin")):
+        raise Fail("build_recovery_sim/recovery.bin missing (see README)")
+    check("Firmware marked valid" in open(SERIAL_LOG, errors="replace").read(), "main firmware marks itself valid once the network is up")
+    check(status()["dev"]["part"] == "ota_0", "running from ota_0")
+
+    def restart(expect):  # -no-reboot: a reset ends QEMU; start it again on the same flash
+        QEMU[0].wait(timeout=30)
+        sink.connected.clear()
+        if expect == "recovery":
+            if os.path.exists(SERIAL_LOG):
+                os.remove(SERIAL_LOG)
+            env = dict(os.environ, KEEP_FLASH="1")
+            QEMU[:] = [subprocess.Popen([os.path.join(ROOT, "sim", "qemu_run.sh"), SERIAL_LOG], env=env,
+                                        stdout=open(SERIAL_LOG + ".qemu", "w"), stderr=subprocess.STDOUT)]
+            return wait_log("Recovery ready", 1, 60)
+        start_qemu(keep_flash=True)
+        return sink.connected.wait(10)
+
+    code, _ = http_req("POST", f"{BOARD}/api/ll/recovery")
+    check(code == 200 and restart("recovery"), "the Recovery mode button reboots into the recovery app")
+    code, body = http_req("GET", f"{BOARD}/api/info")
+    check(code == 200 and "Recovery mode" in body and "ota_0:" in body, f"recovery info: {' | '.join(body.split(chr(10))[:3])}")
+    code, page = http_req("GET", f"{BOARD}/")
+    check(code == 200 and "/api/ota/update" in page, "recovery page offers firmware upload at /api/ota/update")
+    code, _ = http_req("POST", f"{BOARD}/api/boot?part=ota_1")
+    check(code == 400, f"refuses to boot an empty slot ({code})")
+    code, _ = http_req("POST", f"{BOARD}/api/boot?part=ota_0")
+    check(code == 200 and restart("main"), "boots the existing image again from recovery")
+    check(status()["dev"]["part"] == "ota_0", "back on ota_0")
+
+
 def sc_reboot(sink):
     """Restore after reboot: PAUSED pushed before reboot; subscriptions and track saved to NVS, restored as PAUSED at boot and pushed, controller resumes from the same position with just Play"""
     EventHandler.events.clear()
@@ -940,7 +1002,7 @@ def sc_local(sink):
 
 SCENARIOS = {"basic": sc_basic, "hires": sc_hires, "seek": sc_seek, "switch": sc_switch, "mp3": sc_mp3, "errors": sc_errors,
              "events": sc_events, "sockets": sc_sockets, "mislabel": sc_mislabel, "startup": sc_startup, "local": sc_local,
-             "analog": sc_analog, "preempt": sc_preempt, "wav": sc_wav, "reboot": sc_reboot, "offline": sc_offline, "ota": sc_ota, "m4a": sc_m4a}
+             "analog": sc_analog, "preempt": sc_preempt, "wav": sc_wav, "reboot": sc_reboot, "offline": sc_offline, "ota": sc_ota, "m4a": sc_m4a, "recovery": sc_recovery}
 
 
 def main():

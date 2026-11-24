@@ -8,6 +8,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "livelab.h"
@@ -144,6 +146,8 @@ static esp_err_t status_handler(httpd_req_t *r)
     ADDS("mac", macs);
     ADDS("ssid", sta ? (const char *)ap.ssid : "");
     ADDS("fw", app->version);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    ADDS("part", run ? run->label : "");
     ADDS("idf", app->idf_ver);
     ADD("\"rssi\":%d,\"channel\":%d,\"uptime\":%lld,\"heap\":%u,\"heapMin\":%u,\"psram\":%u}", sta ? ap.rssi : 0,
         sta ? ap.primary : 0, esp_timer_get_time() / 1000000,
@@ -233,6 +237,20 @@ static esp_err_t settings_handler(httpd_req_t *r)
     return httpd_resp_sendstr(r, "ok");
 }
 
+// Reboot into the recovery app in the factory partition (WiFi-only firmware upload page)
+static esp_err_t recovery_handler(httpd_req_t *r)
+{
+    const esp_partition_t *f = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    if (!f) return httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "No recovery partition");
+    esp_err_t e = esp_ota_set_boot_partition(f);
+    if (e != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(e));
+    ESP_LOGW(TAG, "Rebooting into recovery mode");
+    httpd_resp_sendstr(r, "ok");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 void web_start(httpd_handle_t h, const char *ip)
 {
     strlcpy(s_ip, ip, sizeof s_ip);
@@ -242,6 +260,7 @@ void web_start(httpd_handle_t h, const char *ip)
         {.uri = "/api/ll/output", .method = HTTP_POST, .handler = output_handler},
         {.uri = "/api/ll/control", .method = HTTP_POST, .handler = control_handler},
         {.uri = "/api/ll/settings", .method = HTTP_POST, .handler = settings_handler},
+        {.uri = "/api/ll/recovery", .method = HTTP_POST, .handler = recovery_handler},
     };
     for (size_t i = 0; i < sizeof u / sizeof u[0]; i++) {
         esp_err_t e = httpd_register_uri_handler(h, &u[i]);

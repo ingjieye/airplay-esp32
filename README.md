@@ -57,7 +57,9 @@ Cloud Music; other DLNA control points work too.
   - Settings, OTA upload and live logs.
 - **QEMU simulator** (`sim/`): runs the same firmware with the test script acting as
   control point, media server and receiver, and compares audio sample by sample. It has
-  18 scenarios.
+  19 scenarios.
+- **WiFi-only maintenance**: after a one-time UART install, everything is updated over WiFi
+  and a bad image cannot brick the board (see [Recovery](#recovery)).
 
 ### Board
 
@@ -82,6 +84,11 @@ curl -X POST --data-binary @build_ll/airplay2-receiver.bin http://<board-ip>/api
 curl -X POST http://<board-ip>/api/system/restart
 # WebSocket log stream: ws://<board-ip>/ws/logs
 
+# Recovery app (factory partition), real board and simulator variants
+idf.py -C recovery -B $PWD/build_recovery -D SDKCONFIG=$PWD/build_recovery/sdkconfig build
+idf.py -C recovery -B $PWD/build_recovery_sim -D SDKCONFIG=$PWD/build_recovery_sim/sdkconfig \
+  -D SDKCONFIG_DEFAULTS="$PWD/recovery/sdkconfig.defaults;$PWD/recovery/sdkconfig.sim" build
+
 # Simulator: build the sim variant, generate media once, run all scenarios
 idf.py -B build_sim -D SDKCONFIG=build_sim/sdkconfig \
   -D SDKCONFIG_DEFAULTS="config/sdkconfig.defaults;config/sdkconfig.defaults.livelab;config/sdkconfig.defaults.sim" build
@@ -92,6 +99,30 @@ python3 sim/test_sim.py            # or: python3 sim/test_sim.py m4a reboot
 Run the simulator with the system Python, not inside the `export.sh` shell. It needs
 `numpy` and `ffmpeg`. QEMU hangs while writing flash during OTA, so the `ota` scenario
 stops after the image has been received and verified.
+
+### Recovery
+
+Partition table `components/boards/partitions_livelab.csv`: nvs, otadata, `ota_0` and `ota_1`
+(3 MB each), `factory` (1 MB, the recovery app) and SPIFFS.
+
+- **Rollback**: a newly flashed image boots as "pending verify" and marks itself valid once
+  the network, web UI and OTA endpoint are up. If it resets before that, the bootloader
+  goes back to the previous image.
+- **Boot-loop guard** (`bootloader_components/livelab_boot_hooks`): the bootloader counts
+  boots in `RTC_CNTL_STORE0`. The count is cleared on power-on, and by the firmware after
+  60 s of uptime. On the 5th boot in a row without a healthy run, the bootloader erases
+  otadata and starts the factory partition.
+- **Recovery app** (`recovery/`): joins the saved WiFi, or opens the open hotspot
+  `ESP32-Recovery` at 192.168.4.1.
+  - It serves a firmware upload page and the same `POST /api/ota/update` endpoint, so the
+    usual curl command works.
+  - It can boot an existing image again: `POST /api/boot?part=ota_0`.
+  - The main firmware's System page has a **Recovery mode** button
+    (`POST /api/ll/recovery`).
+- The recovery app is never updated over the air. Only the bootloader, the partition
+  table and the recovery app need UART, once.
+- To test it, build with `CONFIG_LIVELAB_BOOT_TEST=1` (crashes before marking itself
+  valid: expect a rollback) or `=2` (crashes 10 s after every boot: expect recovery mode).
 
 Everything below is the upstream README.
 

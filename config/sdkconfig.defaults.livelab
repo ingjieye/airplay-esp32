@@ -27,3 +27,9 @@ CONFIG_HTTPD_MAX_URI_LEN=512
 # with -Os, 24bit FLAC decoding + S/PDIF encoding can't keep up (dropouts, crackle on track change). This layer must come after .bt to override it
 CONFIG_COMPILER_OPTIMIZATION_SIZE=n
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Recovery: factory partition with a WiFi-only recovery app (recovery/), app rollback, and a
+# bootloader hook (bootloader_components/livelab_boot_hooks) that starts the recovery app after
+# repeated failed boots. Together these make UART flashing unnecessary after the first install.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="components/boards/partitions_livelab.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

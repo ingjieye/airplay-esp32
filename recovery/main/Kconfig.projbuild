@@ -1,0 +1,5 @@
+menu "Recovery"
+    config RECOVERY_SIM
+        bool "QEMU simulator build (OpenCores virtual NIC instead of WiFi)"
+        default n
+endmenu

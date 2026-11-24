@@ -5,6 +5,9 @@
 #include "dlna.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_timer.h"
+#include "soc/rtc_cntl_reg.h"
 #include "ethernet.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
@@ -169,6 +172,15 @@ static esp_err_t sim_handler(httpd_req_t *r)
 }
 #endif
 
+// Boot-failure counter shared with the bootloader hook (bootloader_components/livelab_boot_hooks):
+// clear it once the firmware has been up for a while, so only boot loops lead to recovery mode.
+#define BOOT_MAGIC 0xB0070000u
+static void healthy_cb(void *arg)
+{
+    REG_WRITE(RTC_CNTL_STORE0_REG, BOOT_MAGIC);
+    ESP_LOGI(TAG, "Running for 60 s: boot-failure counter cleared");
+}
+
 static bool get_ip(char *ip, size_t n)
 {
     if (ethernet_is_connected() && ethernet_get_ip_str(ip, n) == ESP_OK && ip[0]) return true;
@@ -212,4 +224,21 @@ void livelab_start(void)
     httpd_register_uri_handler(h, &su);  // attached to the DLNA HTTP server, doesn't take a slot on the web server
 #endif
     ESP_LOGI(TAG, "DLNA started: http://%s:%d/description.xml, web page http://%s/", ip, DLNA_PORT, ip);
+
+    // Rollback: a new image stays "pending verify" until it gets this far (network up, web and OTA
+    // reachable); if it reboots before that, the bootloader goes back to the previous image.
+#if CONFIG_LIVELAB_BOOT_TEST == 1
+    ESP_LOGE(TAG, "Boot test 1: crashing before marking the image valid");
+    abort();
+#endif
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) ESP_LOGI(TAG, "Firmware marked valid");
+#if CONFIG_LIVELAB_BOOT_TEST == 2
+    ESP_LOGE(TAG, "Boot test 2: crashing in 10 s");
+    static esp_timer_handle_t ct;
+    const esp_timer_create_args_t ca = {.callback = (esp_timer_cb_t)abort, .name = "crash_test"};
+    if (esp_timer_create(&ca, &ct) == ESP_OK) esp_timer_start_once(ct, 10 * 1000000LL);
+#endif
+    static esp_timer_handle_t t;
+    const esp_timer_create_args_t ta = {.callback = healthy_cb, .name = "healthy"};
+    if (!t && esp_timer_create(&ta, &t) == ESP_OK) esp_timer_start_once(t, 60 * 1000000LL);
 }

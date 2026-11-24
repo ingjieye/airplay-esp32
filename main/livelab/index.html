@@ -222,7 +222,7 @@ footer{font-size:12px;color:var(--muted);text-align:center}
 
     <section class="card">
       <h2 data-i18n="maint"></h2>
-      <div class="btns"><button class="btn danger" id="reboot" data-i18n="reboot"></button></div>
+      <div class="btns"><button class="btn danger" id="reboot" data-i18n="reboot"></button><button class="btn ghost" id="recovery" data-i18n="recovery"></button></div>
     </section>
   </div>
 
@@ -257,7 +257,7 @@ const I18N = {
     channel:'信道 {0}', noNets:'没有找到网络', scanFail:'扫描失败：{0}', needSsid:'请填写网络名称',
     confirmWifi:'保存「{0}」并重启？连接失败时板子会开出热点「ESP32-AirPlay-Setup」。',
     devInfo:'设备信息', fwUpdate:'固件升级', upload:'上传', log:'日志', start:'开始', clear:'清空', maint:'维护',
-    reboot:'重启设备', confirmReboot:'确定重启设备？正在播放的音乐会中断。', needFw:'请先选择固件文件',
+    reboot:'重启设备', confirmReboot:'确定重启设备？正在播放的音乐会中断。', recovery:'进入恢复模式', confirmRecovery:'重启进入恢复模式？恢复模式只提供固件上传页面（同一个地址），上传固件后自动回到正常模式。', needFw:'请先选择固件文件',
     confirmFw:'上传 {0}（{1} MB）并升级？升级过程中请不要断电。', uploading:'上传中 {0}%',
     fwOk:'升级成功，正在重启…', fwFail:'升级失败：{0}', uploadAbort:'上传中断'
   },
@@ -287,7 +287,7 @@ const I18N = {
     channel:'ch {0}', noNets:'No networks found', scanFail:'Scan failed: {0}', needSsid:'Please enter a network name',
     confirmWifi:'Save "{0}" and restart? If it cannot connect, the board opens the hotspot "ESP32-AirPlay-Setup".',
     devInfo:'Device info', fwUpdate:'Firmware update', upload:'Upload', log:'Log', start:'Start', clear:'Clear', maint:'Maintenance',
-    reboot:'Restart device', confirmReboot:'Restart the device? Playback will be interrupted.', needFw:'Please choose a firmware file first',
+    reboot:'Restart device', confirmReboot:'Restart the device? Playback will be interrupted.', recovery:'Recovery mode', confirmRecovery:'Restart into recovery mode? It only offers a firmware upload page (same address) and returns to normal mode after an upload.', needFw:'Please choose a firmware file first',
     confirmFw:'Upload {0} ({1} MB) and update? Do not power off during the update.', uploading:'Uploading {0}%',
     fwOk:'Update succeeded, restarting…', fwFail:'Update failed: {0}', uploadAbort:'Upload interrupted'
   }
@@ -534,7 +534,7 @@ function render(s) {
     + stat('uptime', `${Math.floor(up/86400)}<small>${t('day')}</small>${Math.floor(up/3600)%24}<small>${t('hour')}</small>${Math.floor(up/60)%60}<small>${t('min')}</small>`)
     + stat('heap', `${(d.heap/1024).toFixed(0)}<small>${t('heapMin', (d.heapMin/1024).toFixed(0))}</small>`)
     + stat('PSRAM', `${(d.psram/1048576).toFixed(2)}<small>${t('psramFree')}</small>`)
-    + stat('fw', `<span style="font-size:13px">${esc(d.fw)}</span>`) + stat('MAC', `<span style="font-size:13px">${esc(d.mac)}</span>`);
+    + stat('fw', `<span style="font-size:13px">${esc(d.fw)}${d.part ? ' · ' + esc(d.part) : ''}</span>`) + stat('MAC', `<span style="font-size:13px">${esc(d.mac)}</span>`);
   $('wifiNow').textContent = d.ssid ? t('wifiNow', d.ssid, d.rssi) : t('notConn');
   $('foot').textContent = `${d.name} · ${d.ip} · ESP-IDF ${d.idf}`;
 }
@@ -615,6 +615,11 @@ async function reboot(skipConfirm) {
   waitBack();
 }
 $('reboot').onclick = () => reboot(false);
+$('recovery').onclick = async () => {
+  if (!confirm(t('confirmRecovery'))) return;
+  try { await post('/api/ll/recovery', ''); } catch (e) {}
+  $('state').textContent = t('rebooting');
+};
 function waitBack() {
   let n = 0;
   const t = setInterval(async () => {
