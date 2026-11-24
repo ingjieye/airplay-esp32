@@ -18,6 +18,85 @@
 
 ---
 
+## About this fork: the `livelab` branch
+
+This branch adapts the firmware to the LiveLab ESP32-WROVER-E board (TOSLINK optical
+transmitter + 3.5mm DAC) and adds a **DLNA / UPnP AV media renderer**, so one board takes
+AirPlay 2, Bluetooth A2DP and DLNA, and plays any of them bit-perfect over optical S/PDIF
+or through the analog output. The main use case is casting lossless FLAC from NetEase
+Cloud Music; other DLNA control points work too.
+
+### What it adds
+
+- **DLNA renderer** (`main/livelab/`): SSDP discovery, AVTransport / RenderingControl /
+  ConnectionManager over SOAP, GENA eventing. Pulls the stream over HTTP into a 1.5 MB
+  PSRAM buffer with seeking.
+  - Formats: FLAC (up to 96 kHz / 24-bit), WAV, MP3 and M4A (AAC-LC). The format is
+    detected from the file content, not the Content-Type (NetEase mislabels FLAC and WAV
+    as `audio/mpeg`).
+  - Built for control points that rely on events rather than polling: subscriptions are
+    kept when a phone is temporarily unreachable, and a re-subscribe from the same callback
+    keeps its SID.
+  - Survives restarts: subscriptions and the current track are stored in NVS. Before a
+    restart or OTA the renderer pauses and tells the control point; after boot a plain
+    Play resumes at the saved position.
+- **Unified 24-bit output** (`output.c`): one task owns I2S. You can switch between
+  optical S/PDIF (software BMC encoding on IO14, APLL clock) and the 3.5mm DAC during
+  playback. A sample-rate change mutes briefly so the receiver can relock.
+- **Source preemption** (`livelab.c`): the newest source wins. Starting DLNA pauses
+  AirPlay and disconnects Bluetooth, and the other way round. All three stay discoverable.
+- **S/PDIF fixes** (`audio_output_spdif.c`):
+  - Adds the missing stop / write / set-rate hooks.
+  - Each DMA buffer is a whole 192-frame block with the B preamble at a fixed position,
+    so underruns no longer make the receiver lose lock.
+- **Other fixes**: a 64 KB Bluetooth ring buffer in PSRAM, and web log frames split on
+  UTF-8 boundaries.
+- **Web UI** (Chinese / English) at `http://<board-ip>/`:
+  - Now playing, with format, bit rate, buffer and decoder load.
+  - Transport controls, volume and output selection.
+  - Settings, OTA upload and live logs.
+- **QEMU simulator** (`sim/`): runs the same firmware with the test script acting as
+  control point, media server and receiver, and compares audio sample by sample. It has
+  18 scenarios.
+
+### Board
+
+| Signal | GPIO |
+|---|---|
+| Optical (TOSLINK Vin) | 14 |
+| DAC MCLK / BCK / LRCK / DATA | 0 / 33 / 32 / 25 |
+
+IO0 is both MCLK and the boot-mode pin. Switch the output back to optical in the web UI
+before pulling IO0 low to flash over UART.
+
+### Build, flash, test
+
+```bash
+source ~/esp/esp-idf-v6.1/export.sh
+# With Bluetooth (drop the .bt layer for a build without it)
+idf.py -B build_ll -D SDKCONFIG=build_ll/sdkconfig \
+  -D SDKCONFIG_DEFAULTS="config/sdkconfig.defaults;config/sdkconfig.defaults.bt;config/sdkconfig.defaults.livelab" build
+
+# OTA over WiFi (about 15 s), restart, live log
+curl -X POST --data-binary @build_ll/airplay2-receiver.bin http://<board-ip>/api/ota/update
+curl -X POST http://<board-ip>/api/system/restart
+# WebSocket log stream: ws://<board-ip>/ws/logs
+
+# Simulator: build the sim variant, generate media once, run all scenarios
+idf.py -B build_sim -D SDKCONFIG=build_sim/sdkconfig \
+  -D SDKCONFIG_DEFAULTS="config/sdkconfig.defaults;config/sdkconfig.defaults.livelab;config/sdkconfig.defaults.sim" build
+sim/make_media.sh
+python3 sim/test_sim.py            # or: python3 sim/test_sim.py m4a reboot
+```
+
+Run the simulator with the system Python, not inside the `export.sh` shell. It needs
+`numpy` and `ffmpeg`. QEMU hangs while writing flash during OTA, so the `ota` scenario
+stops after the image has been received and verified.
+
+Everything below is the upstream README.
+
+---
+
 ## What is this?
 
 This turns a cheap ESP32 board into a wireless AirPlay 2 speaker. Plug it into any
