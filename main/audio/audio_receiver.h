@@ -137,6 +137,7 @@ void audio_receiver_flush(void);
  * stream's own lead time.
  */
 void audio_receiver_seek_flush(void);
+uint32_t audio_receiver_last_timestamp(void); // for diagnostics
 
 /**
  * Flush for a plain RTSP FLUSH.  On the realtime stream only audio from

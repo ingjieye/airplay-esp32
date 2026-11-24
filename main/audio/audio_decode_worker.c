@@ -193,8 +193,20 @@ void audio_decode_worker_discard_pending(audio_decode_worker_t *worker) {
 
   size_t discarded = 0U;
   audio_decode_job_t *job = NULL;
+  // Diagnostics: RTP range of dropped frames, and jumps within it (old position → new position)
+  uint32_t first_ts = 0, last_ts = 0, steps = 0, step_at = 0, step_ts = 0;
   while (xQueueReceive(worker->queue, (void *)&job, 0) == pdTRUE) {
     if (job) {
+      uint32_t ts = job->packet.rtp_timestamp;
+      if (discarded == 0U) {
+        first_ts = ts;
+      } else if ((uint32_t)(ts - last_ts) > 4096U) {
+        if (steps++ == 0U) {
+          step_at = discarded;
+          step_ts = ts;
+        }
+      }
+      last_ts = ts;
       job_free(job);
       discarded++;
     }
@@ -203,6 +215,9 @@ void audio_decode_worker_discard_pending(audio_decode_worker_t *worker) {
   if (discarded > 0U) {
     ESP_LOGI(TAG, "DQ1 flush: generation=%lu discarded=%u",
              (unsigned long)generation, (unsigned)discarded);
+    ESP_LOGW(TAG, "DQ1 flush detail: rtp %lu..%lu, steps=%lu, first step at #%lu to rtp=%lu",
+             (unsigned long)first_ts, (unsigned long)last_ts, (unsigned long)steps,
+             (unsigned long)step_at, (unsigned long)step_ts);
   }
 }
 

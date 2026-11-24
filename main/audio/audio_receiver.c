@@ -867,6 +867,10 @@ void audio_receiver_flush(void) {
   receiver.blocks_read_in_sequence = 1;
 }
 
+uint32_t audio_receiver_last_timestamp(void) {
+  return receiver.stats.last_timestamp;
+}
+
 void audio_receiver_seek_flush(void) {
   // Mid-stream seek flush (FLUSH / immediate FLUSHBUFFERED).  Same as
   // audio_receiver_flush(); the timeline re-prerolls from the new anchor by

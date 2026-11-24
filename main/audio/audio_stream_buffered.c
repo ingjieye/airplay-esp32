@@ -18,6 +18,12 @@
 #include "audio_crypto.h"
 #include "network/socket_utils.h"
 
+// For diagnostics (set by rtsp_handlers when seeking)
+volatile uint32_t g_diag_until_seq;
+volatile int g_diag_pkts_left;
+static uint32_t g_diag_prev_seq, g_diag_prev_ts;
+static bool g_diag_prev_valid;
+
 #define BUFFERED_AUDIO_PACKET_SIZE 8192
 #define AUDIO_BUFFERED_STACK_SIZE  4096
 // Bounded hand-off to the decode worker.  Long enough to ride out a decode
@@ -150,6 +156,25 @@ static void buffered_audio_task(void *pvParameters) {
       const uint32_t epoch = audio_epoch_get(&state->engine_v2.epoch);
       (void)__atomic_add_fetch(&state->engine_v2.diag_rx_packets, 1U,
                                __ATOMIC_RELAXED);
+
+      // Diagnostics: after a seek, log where sequence numbers/timestamps jump, and the packets around untilSeq
+      if (g_diag_pkts_left > 0) {
+        g_diag_pkts_left--;
+        bool near = (int32_t)(seq_no - g_diag_until_seq) >= -2 &&
+                    (int32_t)(seq_no - g_diag_until_seq) <= 3;
+        bool jump = g_diag_prev_valid &&
+                    (seq_no != g_diag_prev_seq + 1 ||
+                     (uint32_t)(timestamp - g_diag_prev_ts) > 4096U);
+        if (near || jump || !g_diag_prev_valid) {
+          ESP_LOGW(TAG, "diag pkt: seq=%lu ts=%lu (prev seq=%lu ts=%lu) untilSeq=%lu%s",
+                   (unsigned long)seq_no, (unsigned long)timestamp,
+                   (unsigned long)g_diag_prev_seq, (unsigned long)g_diag_prev_ts,
+                   (unsigned long)g_diag_until_seq, near ? " NEAR" : "");
+        }
+        g_diag_prev_seq = seq_no;
+        g_diag_prev_ts = timestamp;
+        g_diag_prev_valid = true;
+      }
 
       // Drop stale pre-seek/old-track packets before AES and AAC work.  The
       // bytes still have to be drained from TCP (done above), but they no

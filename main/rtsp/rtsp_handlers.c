@@ -176,7 +176,8 @@ static bool start_ntp_timing_or_fail(int socket, rtsp_conn_t *conn,
 static bool start_audio_receiver_or_fail(int socket, rtsp_conn_t *conn,
                                          const rtsp_request_t *req,
                                          int64_t stream_type) {
-#ifdef CONFIG_BT_A2DP_ENABLE
+#if defined(CONFIG_BT_A2DP_ENABLE) && !defined(CONFIG_AUDIO_OUTPUT_LIVELAB)
+  // LiveLab keeps Bluetooth on: any source can pre-empt at any time (its own task stacks are in PSRAM, internal RAM is sufficient)
   // Tear the BT radio down here rather than waiting for the coex task's
   // PLAYING event: that lands ~600 ms after RECORD, by which time these tasks
   // have already tried and failed to allocate their stacks.
@@ -1850,6 +1851,16 @@ static void handle_flushbuffered(int socket, rtsp_conn_t *conn,
       audio_receiver_set_deferred_flush((uint32_t)flush_until_ts);
     } else {
       ESP_LOGI(TAG, "FLUSHBUFFERED immediate (missing from/until fields)");
+      // Diagnostics: which fields the iPhone actually sends when seeking
+      ESP_LOGW(TAG, "FLUSHBUFFERED fields: fromSeq=%d:%" PRId64 " fromTS=%d:%" PRId64
+               " untilSeq=%d:%" PRId64 " untilTS=%d:%" PRId64 " last_rx_ts=%" PRIu32,
+               got_from_seq, flush_from_seq, got_from_ts, flush_from_ts,
+               got_until_seq, flush_until_seq, got_until_ts, flush_until_ts,
+               audio_receiver_last_timestamp());
+      extern volatile uint32_t g_diag_until_seq;
+      extern volatile int g_diag_pkts_left;
+      g_diag_until_seq = (uint32_t)flush_until_seq;
+      g_diag_pkts_left = 3000;
     }
   }
 
